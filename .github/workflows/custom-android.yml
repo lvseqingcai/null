@@ -88,7 +88,7 @@ jobs:
           echo 'path=app/Butterfly-2.6.0-custom-arm64.apk' >> "$GITHUB_OUTPUT"
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Butterfly-2.6.0-custom-arm64
           path: |
