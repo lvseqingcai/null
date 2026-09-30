@@ -1,0 +1,98 @@
+name: Build custom Android APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-android-arm64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter from pubspec
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version-file: app/pubspec.yaml
+          cache: true
+
+      - name: Configure Android signing fallback
+        run: |
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -v \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -dname "CN=Android Debug,O=Android,C=US" \
+              -keyalg RSA -keysize 2048 -validity 10000
+          fi
+
+      - name: Get Dart and Flutter dependencies
+        run: flutter pub get
+
+      - name: Analyze modified sources
+        run: >-
+          dart analyze
+          lib/cubits/transform.dart
+          lib/selections/properties/pen.dart
+          lib/views/zoom.dart
+          lib/renderers/elements/pen.dart
+          test/cubits/transform_test.dart
+
+      - name: Verify custom limits
+        run: |
+          grep -q 'const kMaxZoom = 200000.0;' lib/cubits/transform.dart
+          grep -q 'min: 0.00000001,' lib/selections/properties/pen.dart
+          grep -q 'fractionDigits: 8,' lib/selections/properties/pen.dart
+
+      - name: Build custom nightly ARM64 APK
+        run: >-
+          flutter build apk
+          --release
+          --flavor nightly
+          --target-platform android-arm64
+          --split-per-abi
+
+      - name: Locate and validate APK
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find build/app/outputs -type f -name '*arm64*v8a*nightly*release*.apk' -o -name '*nightly*arm64*v8a*release*.apk' | head -n 1)"
+          if [ -z "$APK" ]; then
+            echo 'ARM64 nightly APK not found' >&2
+            find build/app/outputs -type f -name '*.apk' -print >&2
+            exit 1
+          fi
+          unzip -tq "$APK"
+          unzip -Z1 "$APK" | grep -q '^AndroidManifest.xml$'
+          unzip -Z1 "$APK" | grep -q '^resources.arsc$'
+          test "$(unzip -Z1 "$APK" | awk -F/ '/^lib\//{print $2}' | sort -u | tr '\n' ' ')" = 'arm64-v8a '
+          cp "$APK" Butterfly-2.6.0-custom-arm64.apk
+          sha256sum Butterfly-2.6.0-custom-arm64.apk | tee Butterfly-2.6.0-custom-arm64.apk.sha256
+          echo 'path=app/Butterfly-2.6.0-custom-arm64.apk' >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Butterfly-2.6.0-custom-arm64
+          path: |
+            app/Butterfly-2.6.0-custom-arm64.apk
+            app/Butterfly-2.6.0-custom-arm64.apk.sha256
+          if-no-files-found: error
+          retention-days: 14
